@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zabbix server na školním virtuálu – semestrální projekt</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<a class="skip-link" href="#obsah">Přeskočit na obsah</a>
+
+<header class="hero">
+    <div class="hero-text">
+        <p class="hero-course">Semestrální projekt</p>
+        <h1>Monitoring serveru pomocí Zabbixu</h1>
+        <p class="hero-lead">
+            Instalace a konfigurace Zabbix serveru 7.0 LTS na přiděleném školním virtuálu,
+            monitoring samotného stroje i Raspberry Pi s Arduinem a přesun webového rozhraní
+            na vlastní port a doménu.
+        </p>
+    </div>
+
+    <aside class="host-card" aria-label="Stav monitorovaného hostitele">
+        <div class="host-card-head">
+            <span class="host-name">sul0116</span>
+            <span class="badge badge-ok" title="Zabbix agent je dostupný">ZBX</span>
+        </div>
+        <dl class="host-facts">
+            <div><dt>Systém</dt><dd>Ubuntu 24.04.1 LTS</dd></div>
+            <div><dt>Zabbix</dt><dd>7.0.31 LTS</dd></div>
+            <div><dt>Databáze</dt><dd>MariaDB 10.11.14</dd></div>
+            <div><dt>Web</dt><dd>Apache 2.4.58, port 8080</dd></div>
+            <div><dt>Adresa</dt><dd>http://sul0116.zabbix:8080</dd></div>
+        </dl>
+        <p class="host-status"><span class="dot dot-ok" aria-hidden="true"></span> Agent dostupný, data se sbírají</p>
+    </aside>
+</header>
+
+<div class="layout">
+
+<nav class="toc" aria-label="Obsah prezentace">
+    <p class="toc-title">Obsah</p>
+    <ol>
+        <li><a href="#uvod">Úvod a cíl</a></li>
+        <li><a href="#prostredi">Prostředí a topologie</a></li>
+        <li><a href="#instalace">Instalace</a></li>
+        <li><a href="#pruvodce">Webový průvodce</a></li>
+        <li><a href="#uzivatele">Správa uživatelů</a></li>
+        <li><a href="#monitoring">Monitoring serveru</a></li>
+        <li><a href="#port-domena">Port 8080 a doména</a></li>
+        <li><a href="#raspberry">Raspberry Pi a Arduino</a></li>
+        <li><a href="#rozsireni">Možná rozšíření</a></li>
+        <li><a href="#zaver">Závěr</a></li>
+    </ol>
+</nav>
+
+<main id="obsah">
+
+<section id="uvod">
+    <h2>Úvod a cíl projektu</h2>
+    <p>
+        Cílem projektu bylo zprovoznit monitorovací systém <strong>Zabbix</strong> na virtuálním
+        serveru, který nám byl přidělen v rámci předmětu. Zabbix průběžně sbírá data o stavu
+        zařízení a služeb (vytížení procesoru, paměť, disky, síťový provoz, dostupnost),
+        ukládá je do databáze, zobrazuje je v grafech a při překročení nastavených limitů
+        hlásí problémy.
+    </p>
+    <p>Dílčí cíle:</p>
+    <ul>
+        <li>nainstalovat Zabbix server, webové rozhraní a Zabbix agenta,</li>
+        <li>připravit databázi MariaDB a naimportovat do ní schéma Zabbixu,</li>
+        <li>spravovat uživatele webového rozhraní,</li>
+        <li>monitorovat samotný virtuál, na kterém Zabbix běží,</li>
+        <li>přesunout webové rozhraní na port 8080, aby port 80 zůstal volný pro další server,</li>
+        <li>zpřístupnit rozhraní pod jménem místo IPv6 adresy,</li>
+        <li>monitorovat Raspberry Pi v domácí síti a hlídat připojení Arduina.</li>
+    </ul>
+</section>
+
+<section id="prostredi">
+    <h2>Prostředí a topologie</h2>
+    <p>
+        Všechny součásti běží na jednom virtuálu <code>sul0116</code>. Připojení probíhá
+        z vlastního notebooku přes školní VPN, SSH i webové rozhraní jedou přes IPv6.
+    </p>
+
+    <div class="table-wrap">
+        <table>
+            <caption>Použité komponenty</caption>
+            <thead>
+                <tr><th scope="col">Součást</th><th scope="col">Verze / hodnota</th><th scope="col">Úloha</th></tr>
+            </thead>
+            <tbody>
+                <tr><td>Operační systém</td><td>Ubuntu Server 24.04.1 LTS</td><td>základ virtuálu</td></tr>
+                <tr><td>Zabbix server</td><td>7.0.31 LTS</td><td>sběr a vyhodnocování dat, port 10051</td></tr>
+                <tr><td>Zabbix agent</td><td>7.0 LTS</td><td>měření na monitorovaném stroji, port 10050</td></tr>
+                <tr><td>Databáze</td><td>MariaDB 10.11.14</td><td>úložiště konfigurace a naměřených hodnot</td></tr>
+                <tr><td>Webový server</td><td>Apache 2.4.58 + PHP</td><td>webové rozhraní Zabbixu, port 8080</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <h3>Síťová rozhraní virtuálu</h3>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr><th scope="col">Rozhraní</th><th scope="col">Adresa</th></tr>
+            </thead>
+            <tbody>
+                <tr><td><code>ens160</code></td><td>2001:718:1001:2cf:20c:29ff:fedc:bef2</td></tr>
+                <tr><td><code>ens192</code></td><td>192.168.0.186/16</td></tr>
+                <tr><td><code>ens224</code></td><td>10.0.0.49/8</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <figure class="diagram" aria-label="Schéma zapojení">
+        <div class="diagram-row">
+            <div class="node">
+                <span class="node-title">Notebook</span>
+                <span class="node-sub">školní VPN, prohlížeč, SSH</span>
+            </div>
+            <div class="link">
+                <span class="link-label">IPv6: HTTP :8080, SSH :22</span>
+            </div>
+            <div class="node node-vm">
+                <span class="node-title">Virtuál sul0116</span>
+                <ul class="node-stack">
+                    <li>Apache :8080 → webové rozhraní</li>
+                    <li>Zabbix server :10051</li>
+                    <li>Zabbix agent :10050</li>
+                    <li>MariaDB :3306 (jen lokálně)</li>
+                </ul>
+            </div>
+        </div>
+        <figcaption>Schéma: notebook se k virtuálu dostane jen přes IPv6. Zabbix server čte data od agenta na stejném stroji přes 127.0.0.1.</figcaption>
+    </figure>
+</section>
+
+<section id="instalace">
+    <h2>Instalace</h2>
+    <p>
+        Použil jsem verzi <strong>Zabbix 7.0 LTS</strong> s databází MariaDB a webovým serverem Apache.
+        Verze LTS má dlouhodobou podporu a je k ní nejvíc dokumentace.
+    </p>
+
+    <ol class="steps">
+        <li>
+            <h3>Ověření systému a aktualizace</h3>
+<pre><code>cat /etc/os-release
+sudo apt update && sudo apt upgrade -y</code></pre>
+            <p>Po aktualizaci byl virtuál restartován.</p>
+        </li>
+
+        <li>
+            <h3>Přidání repozitáře Zabbix</h3>
+<pre><code>wget https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.0+ubuntu24.04_all.deb
+sudo dpkg -i zabbix-release_latest_7.0+ubuntu24.04_all.deb
+sudo apt update</code></pre>
+        </li>
+
+        <li>
+            <h3>Instalace balíčků</h3>
+<pre><code>sudo apt install -y zabbix-server-mysql zabbix-frontend-php zabbix-apache-conf \
+  zabbix-sql-scripts zabbix-agent mariadb-server</code></pre>
+        </li>
+
+        <li>
+            <h3>Vytvoření databáze</h3>
+<pre><code>CREATE DATABASE zabbix CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+CREATE USER zabbix@localhost IDENTIFIED BY '&lt;heslo_db&gt;';
+GRANT ALL PRIVILEGES ON zabbix.* TO zabbix@localhost;
+SET GLOBAL log_bin_trust_function_creators = 1;</code></pre>
+        </li>
+
+        <li>
+            <h3>Import schématu</h3>
+<pre><code>zcat /usr/share/zabbix-sql-scripts/mysql/server.sql.gz | \
+  mysql --default-character-set=utf8mb4 -uzabbix -p zabbix
+sudo mysql -uroot -e "SET GLOBAL log_bin_trust_function_creators = 0;"</code></pre>
+            <p>Kontrola, že import proběhl celý:</p>
+<pre><code>sudo mysql -uroot -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='zabbix';"</code></pre>
+            <p>Výsledek byl <strong>203 tabulek</strong>, což odpovídá kompletnímu schématu.</p>
+            <figure class="shot">
+                <img src="img/db-import.png" alt="Vytvoření databáze a import schématu, výsledek 203 tabulek" class="zoomable" loading="lazy">
+                <figcaption>Vytvoření databáze a kontrola importu</figcaption>
+            </figure>
+        </li>
+
+        <li>
+            <h3>Heslo k databázi v konfiguraci serveru</h3>
+            <p>V souboru <code>/etc/zabbix/zabbix_server.conf</code> jsem odkomentoval a vyplnil řádek:</p>
+<pre><code>DBPassword=&lt;heslo_db&gt;</code></pre>
+        </li>
+
+        <li>
+            <h3>Spuštění služeb</h3>
+<pre><code>sudo systemctl restart zabbix-server zabbix-agent apache2
+sudo systemctl enable zabbix-server zabbix-agent apache2
+sudo tail -n 20 /var/log/zabbix/zabbix_server.log</code></pre>
+            <p>
+                V logu se objevil řádek <code>enabling Zabbix agent checks on host "Zabbix server": interface became available</code>,
+                tedy server se připojil k databázi i ke svému agentovi.
+            </p>
+            <figure class="shot">
+                <img src="img/server-log.png" alt="Běžící procesy Zabbix serveru a výpis logu" class="zoomable" loading="lazy">
+                <figcaption>Zabbix server běží a agent je dostupný</figcaption>
+            </figure>
+        </li>
+    </ol>
+</section>
+
+<section id="pruvodce">
+    <h2>Webový průvodce a první přihlášení</h2>
+    <p>
+        Webové rozhraní se při prvním otevření nastavuje průvodcem. Ten zkontroluje požadavky PHP
+        a zeptá se na připojení k databázi.
+    </p>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th scope="col">Položka</th><th scope="col">Hodnota</th></tr></thead>
+            <tbody>
+                <tr><td>Typ databáze</td><td>MySQL</td></tr>
+                <tr><td>Server</td><td>localhost, port 0 (výchozí)</td></tr>
+                <tr><td>Databáze a uživatel</td><td>zabbix / zabbix</td></tr>
+                <tr><td>Časové pásmo</td><td>Europe/Prague</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <p>
+        Po instalaci jsem se přihlásil výchozím účtem <code>Admin</code> a heslo jsem hned změnil.
+    </p>
+    <figure class="shot">
+        <img src="img/setup-wizard.png" alt="Nastavení připojení k databázi ve webovém průvodci" class="zoomable" loading="lazy">
+        <figcaption>Krok průvodce „Configure DB connection“</figcaption>
+    </figure>
+</section>
+
+<section id="uzivatele">
+    <h2>Správa uživatelů</h2>
+    <h3>Uživatel se stejnými právy jako Admin</h3>
+    <p>Nový uživatel dostal stejná oprávnění jako výchozí správce:</p>
+    <ul>
+        <li>skupina <strong>Zabbix administrators</strong>,</li>
+        <li>role <strong>Super admin role</strong> na záložce Oprávnění.</li>
+    </ul>
+    <aside class="callout">
+        <p>
+            Uživatel bez role nebo bez práv ke skupině hostitelů v seznamu hostitelů nic nevidí.
+            Roli si navíc nikdo nemůže změnit sám sobě, úpravy se proto dělají pod účtem Admin.
+        </p>
+    </aside>
+</section>
+
+<section id="monitoring">
+    <h2>Monitoring samotného serveru</h2>
+    <p>
+        Po instalaci Zabbix automaticky monitoruje sám sebe přes hostitele <strong>Zabbix server</strong>.
+        Agent běží na stejném virtuálu a server se k němu připojuje přes <code>127.0.0.1:10050</code>.
+    </p>
+
+    <h3>Kontrola agenta</h3>
+<pre><code>sudo grep -E "^(Server|ServerActive|Hostname)=" /etc/zabbix/zabbix_agentd.conf
+# Server=127.0.0.1
+# ServerActive=127.0.0.1
+# Hostname=Zabbix server
+
+sudo apt install -y zabbix-get
+zabbix_get -s 127.0.0.1 -k agent.ping   # výsledek 1 = agent odpovídá</code></pre>
+
+    <h3>Nastavení hostitele ve webu</h3>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th scope="col">Nastavení</th><th scope="col">Hodnota</th></tr></thead>
+            <tbody>
+                <tr><td>Rozhraní</td><td>Agent, 127.0.0.1, port 10050</td></tr>
+                <tr><td>Šablona</td><td>Linux by Zabbix agent</td></tr>
+                <tr><td>Skupina</td><td>Zabbix servers</td></tr>
+                <tr><td>Stav</td><td>Povoleno, ikona ZBX zelená</td></tr>
+            </tbody>
+        </table>
+    </div>
+    <p>
+        Šablona <em>Linux by Zabbix agent</em> přináší stovky položek, grafy a triggery:
+        vytížení CPU, paměť, zaplnění disků, provoz na rozhraních <code>ens160</code>,
+        <code>ens192</code> a <code>ens224</code> a počet procesů.
+    </p>
+    <figure class="shot">
+        <img src="img/hosts.png" alt="Hostitel Zabbix server se zelenou ikonou ZBX" class="zoomable" loading="lazy">
+        <figcaption>Monitoring → Hosts: agent je dostupný</figcaption>
+    </figure>
+    <figure class="shot">
+        <img src="img/latest-data.png" alt="Poslední data hostitele Zabbix server" class="zoomable" loading="lazy">
+        <figcaption>Monitoring → Latest data</figcaption>
+    </figure>
+</section>
+
+<section id="port-domena">
+    <h2>Přesun na port 8080 a vlastní doména</h2>
+    <p>
+        Na stejném virtuálu má později běžet další webový server na portu 80. Webové rozhraní
+        Zabbixu jsem proto přesunul do samostatného virtual hostu na port <strong>8080</strong>.
+        Porty 10050 a 10051 se nemění, s webem nesouvisí.
+    </p>
+
+    <ol class="steps">
+        <li>
+            <h3>Vypnutí globální konfigurace</h3>
+            <p>Balíček Zabbixu přidává alias <code>/zabbix</code> platný na všech portech. Ten jsem vypnul:</p>
+<pre><code>sudo a2disconf zabbix</code></pre>
+        </li>
+        <li>
+            <h3>Nový port</h3>
+            <p>Do <code>/etc/apache2/ports.conf</code> přibyl řádek:</p>
+<pre><code>Listen 8080</code></pre>
+        </li>
+        <li>
+            <h3>Virtual host</h3>
+            <p>Soubor <code>/etc/apache2/sites-available/zabbix.conf</code>:</p>
+<pre><code>&lt;VirtualHost *:8080&gt;
+    ServerName sul0116.zabbix
+    Include /etc/zabbix/apache.conf
+    RedirectMatch ^/$ /zabbix/
+
+    ErrorLog ${APACHE_LOG_DIR}/zabbix_error.log
+    CustomLog ${APACHE_LOG_DIR}/zabbix_access.log combined
+&lt;/VirtualHost&gt;</code></pre>
+<pre><code>sudo a2ensite zabbix
+sudo apache2ctl configtest
+sudo systemctl restart apache2</code></pre>
+        </li>
+        <li>
+            <h3>Ověření</h3>
+<pre><code>curl -I http://localhost:8080/zabbix/   # HTTP/1.1 200 OK
+curl -I http://localhost/zabbix/        # HTTP/1.1 404 Not Found</code></pre>
+            <p>Zabbix odpovídá jen na portu 8080 a port 80 je volný.</p>
+            <figure class="shot">
+                <img src="img/curl-8080.png" alt="Výstup curl: port 8080 vrací 200, port 80 vrací 404" class="zoomable" loading="lazy">
+                <figcaption>Kontrola obou portů pomocí curl</figcaption>
+            </figure>
+        </li>
+        <li>
+            <h3>Jméno místo IPv6 adresy</h3>
+            <p>
+                Reverzní DNS záznam virtuálu vrací jen <code>sul0116</code> a <code>sul0116.local</code>,
+                plnohodnotnou doménu virtuál nemá. Jméno jsem proto definoval lokálně v souboru
+                <code>/etc/hosts</code> na notebooku:
+            </p>
+<pre><code>2001:718:1001:2cf:20c:29ff:fedc:bef2   sul0116.zabbix</code></pre>
+<pre><code>sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder</code></pre>
+            <p>Rozhraní je teď dostupné na adrese <code>http://sul0116.zabbix:8080</code>.</p>
+            <aside class="callout">
+                <p>
+                    Záznam v <code>/etc/hosts</code> platí jen na počítači, kde je zapsaný. Pro přístup
+                    odkudkoliv by bylo potřeba vytvořit AAAA záznam ve skutečném DNS.
+                </p>
+            </aside>
+        </li>
+    </ol>
+</section>
+
+
+
+<section id="raspberry">
+    <h2>Monitoring Raspberry Pi a Arduina</h2>
+    <p>
+        Kromě samotného virtuálu Zabbix hlídá i Raspberry Pi 5 v domácí síti a Arduino,
+        které je k němu připojené přes USB. Zabbix server se k Pi nedostane, protože Pi je
+        za domácím routerem a virtuál je dostupný jen přes školní VPN. Agent na Pi proto
+        pracuje v <strong>aktivním režimu</strong>: sám se připojuje k serveru na port 10051
+        a posílá mu data.
+    </p>
+
+    <ol class="chain" aria-label="Cesta dat z Raspberry Pi na Zabbix server">
+        <li class="chain-node">
+            <span class="node-title">Zabbix agent na Raspberry Pi</span>
+            <span class="node-sub">měří systém Pi a připojení Arduina</span>
+        </li>
+        <li class="chain-link">domácí Wi-Fi, port 10051</li>
+        <li class="chain-node">
+            <span class="node-title">Notebook</span>
+            <span class="node-sub">připojený k VPN, drží SSH tunel</span>
+        </li>
+        <li class="chain-link">SSH tunel přes IPv6</li>
+        <li class="chain-node chain-server">
+            <span class="node-title">Zabbix server na sul0116</span>
+            <span class="node-sub">port 10051, ukládá data a vyhodnocuje triggery</span>
+        </li>
+    </ol>
+
+    <h3>Tunel na notebooku</h3>
+    <p>
+        V Cisco Secure Client je zapnutá volba <em>Povolit místní přístup (síť LAN) při
+        používání sítě VPN</em>, aby notebook při zapnuté VPN viděl i domácí síť. Tunel
+        přijímá spojení z domácí sítě na portu 10051 a předává je Zabbix serveru:
+    </p>
+<pre><code>ssh -N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes \
+  -L 0.0.0.0:10051:localhost:10051 \
+  student@2001:718:1001:2cf:20c:29ff:fedc:bef2</code></pre>
+
+    <h3>Agent na Raspberry Pi</h3>
+<pre><code>sudo apt install -y zabbix-agent</code></pre>
+    <p>V souboru <code>/etc/zabbix/zabbix_agentd.conf</code> jsou nastavené tři hodnoty:</p>
+<pre><code>Server=127.0.0.1
+ServerActive=192.168.1.183:10051
+Hostname=rfid-pi</code></pre>
+    <p>
+        <code>ServerActive</code> je adresa notebooku s tunelem, <code>Hostname</code> musí
+        přesně odpovídat názvu hostitele v Zabbixu.
+    </p>
+
+    <h3>Vlastní kontrola Arduina</h3>
+    <p>
+        Arduino není síťové zařízení, takže ho Zabbix hlídá přes Pi. Když je Arduino zapojené,
+        systém vytvoří sériový port <code>/dev/ttyUSB0</code>. Vlastní klíč agenta zjišťuje,
+        zda port existuje:
+    </p>
+<pre><code># /etc/zabbix/zabbix_agentd.conf.d/arduino.conf
+UserParameter=arduino.connected,test -e /dev/ttyUSB0 &amp;&amp; echo 1 || echo 0</code></pre>
+<pre><code>zabbix_agentd -t arduino.connected
+# arduino.connected   [t|1]   Arduino zapojené
+# arduino.connected   [t|0]   Arduino odpojené</code></pre>
+
+    <h3>Nastavení v Zabbixu</h3>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th scope="col">Nastavení</th><th scope="col">Hodnota</th></tr></thead>
+            <tbody>
+                <tr><td>Hostitel</td><td><code>rfid-pi</code>, bez rozhraní</td></tr>
+                <tr><td>Šablona</td><td>Linux by Zabbix agent active (78 položek)</td></tr>
+                <tr><td>Položka</td><td>Arduino připojeno, klíč <code>arduino.connected</code>, typ Zabbix agent (aktivní), interval 30 s</td></tr>
+                <tr><td>Trigger</td><td>Arduino je odpojené od Raspberry Pi, závažnost High</td></tr>
+                <tr><td>Výraz triggeru</td><td><code>last(/rfid-pi/arduino.connected)=0</code></td></tr>
+            </tbody>
+        </table>
+    </div>
+    <p>
+        Šablona pro aktivního agenta přináší přehled o vytížení procesoru, paměti, disku,
+        síti a teplotě Pi. Několik položek je ve stavu nepodporováno, protože je Pi neumí
+        změřit, například rychlost linky Wi-Fi rozhraní. Na funkci monitoringu to nemá vliv.
+    </p>
+    <figure class="shot">
+        <img src="img/pi-hosts.png" alt="Seznam hostitelů v Zabbixu s dostupným hostitelem rfid-pi" class="zoomable" loading="lazy">
+        <figcaption>Hostitel rfid-pi je dostupný a posílá data</figcaption>
+    </figure>
+    <figure class="shot">
+        <img src="img/pi-latest.png" alt="Poslední data hostitele rfid-pi včetně položky Arduino připojeno" class="zoomable" loading="lazy">
+        <figcaption>Poslední data z Raspberry Pi</figcaption>
+    </figure>
+
+    <h3>Test odpojení Arduina</h3>
+    <p>
+        Po vytažení Arduina z USB vznikl ve 20:28:19 problém <em>Arduino je odpojené od
+        Raspberry Pi</em>. Po zapojení se ve 20:29:01 sám uzavřel, výpadek trval 42 sekund.
+    </p>
+    <figure class="shot">
+        <img src="img/pi-problem.png" alt="Aktivní problém Arduino je odpojené od Raspberry Pi" class="zoomable" loading="lazy">
+        <figcaption>Problém po odpojení Arduina</figcaption>
+    </figure>
+    <figure class="shot">
+        <img src="img/pi-resolved.png" alt="Vyřešený problém po opětovném zapojení Arduina" class="zoomable" loading="lazy">
+        <figcaption>Problém vyřešený po zapojení Arduina</figcaption>
+    </figure>
+</section>
+
+<section id="rozsireni">
+    <h2>Možná rozšíření</h2>
+    <p>Projekt je připravený na další kroky:</p>
+    <ul>
+        <li>vlastní dashboard s grafy CPU, paměti a disku obou hostitelů,</li>
+        <li>test triggeru uměle vyvolanou zátěží (<code>stress-ng</code>),</li>
+        <li>webový scénář, který každou minutu ověří dostupnost webového rozhraní,</li>
+        <li>další vlastní metriky přes <code>UserParameter</code>, například počet dostupných aktualizací systému,</li>
+        <li>sledování neúspěšných SSH přihlášení z <code>/var/log/auth.log</code>,</li>
+        <li>webový scénář pro další webovou službu na uvolněném portu 80.</li>
+    </ul>
+</section>
+
+<section id="zaver">
+    <h2>Závěr</h2>
+    <p>
+        Na přiděleném virtuálu běží funkční Zabbix server 7.0 LTS s databází MariaDB a webovým
+        rozhraním. Server monitoruje sám sebe přes Zabbix agenta a šablonu
+        <em>Linux by Zabbix agent</em>, agent je dostupný a data se průběžně sbírají.
+    </p>
+    <p>
+        Webové rozhraní běží ve vlastním virtual hostu na portu 8080 pod jménem
+        <code>sul0116.zabbix</code>, takže port 80 zůstává volný pro další službu.
+    </p>
+    <p>
+        Zabbix kromě virtuálu hlídá i Raspberry Pi v domácí síti. Aktivní agent posílá data
+        přes SSH tunel na notebooku a vlastní klíč <code>arduino.connected</code> hlídá
+        připojení Arduina. Test potvrdil, že odpojení Arduina se do minuty objeví jako
+        problém a po zapojení se sám uzavře.
+    </p>
+    <p>
+        Projekt mi ukázal, jak spolu souvisí jednotlivé vrstvy monitorovacího systému
+        (databáze, server, agent, webové rozhraní) a jak konfigurace Apache a sítě ovlivňuje,
+        odkud a jak se ke službě dá dostat.
+    </p>
+</section>
+
+</main>
+</div>
+
+<div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="Zvětšený obrázek" hidden>
+    <button type="button" class="lightbox-close" aria-label="Zavřít">&times;</button>
+    <img id="lightbox-img" alt="">
+    <p id="lightbox-caption" class="lightbox-caption"></p>
+</div>
+
+<footer>
+    <p>© 2026 Jan, semestrální projekt: Zabbix server na školním virtuálu</p>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
